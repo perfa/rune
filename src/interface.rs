@@ -4,7 +4,14 @@ use sdl2::{event::Event, keyboard::Keycode, pixels::Color, rect::Point, render::
 
 use crate::wad::{LevelData, Linedef, Vertex};
 
-pub struct Interface {}
+pub struct Interface {
+    x_offset: i16,
+    y_offset: i16,
+    level_width: i16,
+    level_height: i16,
+    x_multiplier: f64,
+    y_multiplier: f64,
+}
 
 impl Interface {
     pub const WIDTH: u32 = 320;
@@ -12,10 +19,18 @@ impl Interface {
     pub const MULTIPLIER: u32 = 4;
 
     pub fn new() -> Self {
-        Interface {}
+        Interface {
+            x_offset: 0,
+            y_offset: 0,
+            level_width: Self::WIDTH as i16,
+            level_height: Self::HEIGHT as i16,
+            x_multiplier: 1.0,
+            y_multiplier: 1.0,
+        }
     }
 
     pub fn run(&mut self, level: &LevelData) {
+        self.find_bounds(level);
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
@@ -68,7 +83,7 @@ impl Interface {
         }
     }
 
-    fn find_bounds(&self, level: &LevelData) -> (i16, i16, i16, i16) {
+    fn find_bounds(&mut self, level: &LevelData) {
         let mut min_x = i16::MAX;
         let mut max_x = i16::MIN;
         let mut min_y = i16::MAX;
@@ -87,41 +102,35 @@ impl Interface {
                 max_y = v.y;
             }
         }
-        let x_offset = min_x;
-        let y_offset = min_y;
-        let level_width = max_x - min_x;
-        let level_height = max_y - min_y;
-        (x_offset, y_offset, level_width, level_height)
+        self.x_offset = min_x;
+        self.y_offset = min_y;
+        self.level_width = max_x - min_x;
+        self.level_height = max_y - min_y;
+        self.x_multiplier =
+            f64::from((Self::WIDTH - 2) * Self::MULTIPLIER) / self.level_width as f64 * 1000.;
+        self.y_multiplier =
+            f64::from((Self::HEIGHT - 2) * Self::MULTIPLIER) / self.level_height as f64 * 1000.;
+    }
+
+    fn adjust_coord(&self, x: &i16, y: &i16) -> (i32, i32) {
+        let drawn_x = (x - self.x_offset) as i32 * self.x_multiplier.floor() as i32 / 1000;
+        let drawn_y = (y - self.y_offset) as i32 * self.y_multiplier.floor() as i32 / 1000;
+        (
+            drawn_x as i32 + Self::MULTIPLIER as i32,
+            drawn_y as i32 + Self::MULTIPLIER as i32,
+        )
     }
 
     fn draw_verts(&self, level: &LevelData, canvas: &mut WindowCanvas) {
-        let (x_offset, y_offset, level_width, level_height) = self.find_bounds(level);
-        let x_multiplier =
-            f64::from((Self::WIDTH - 2) * Self::MULTIPLIER) / level_width as f64 * 1000.;
-        let y_multiplier =
-            f64::from((Self::HEIGHT - 2) * Self::MULTIPLIER) / level_height as f64 * 1000.;
-
         canvas.set_draw_color(Color::YELLOW);
-        for Vertex { x, y } in level.vertexes.iter() {
-            let drawn_x = (x - x_offset) as i32 * x_multiplier.floor() as i32 / 1000;
-            let drawn_y = (y - y_offset) as i32 * y_multiplier.floor() as i32 / 1000;
+        level.vertexes.iter().for_each(|Vertex { x, y }| {
+            let (drawn_x, drawn_y) = self.adjust_coord(x, y);
 
-            canvas
-                .draw_point(Point::new(
-                    drawn_x as i32 + Self::MULTIPLIER as i32,
-                    drawn_y as i32 + Self::MULTIPLIER as i32,
-                ))
-                .unwrap();
-        }
+            canvas.draw_point(Point::new(drawn_x, drawn_y)).unwrap();
+        });
     }
 
     fn draw_lines(&self, level: &LevelData, canvas: &mut WindowCanvas) {
-        let (x_offset, y_offset, level_width, level_height) = self.find_bounds(level);
-        let x_multiplier =
-            f64::from((Self::WIDTH - 2) * Self::MULTIPLIER) / level_width as f64 * 1000.;
-        let y_multiplier =
-            f64::from((Self::HEIGHT - 2) * Self::MULTIPLIER) / level_height as f64 * 1000.;
-
         canvas.set_draw_color(Color::RED);
         level.linedefs.iter().for_each(
             |Linedef {
@@ -131,22 +140,13 @@ impl Interface {
              }| {
                 let v1 = level.vertexes[*start_vert];
                 let v2 = level.vertexes[*end_vert];
-
-                let drawn_x1 = (v1.x - x_offset) as i32 * x_multiplier.floor() as i32 / 1000;
-                let drawn_y1 = (v1.y - y_offset) as i32 * y_multiplier.floor() as i32 / 1000;
-                let drawn_x2 = (v2.x - x_offset) as i32 * x_multiplier.floor() as i32 / 1000;
-                let drawn_y2 = (v2.y - y_offset) as i32 * y_multiplier.floor() as i32 / 1000;
+                let (drawn_x1, drawn_y1) = self.adjust_coord(&v1.x, &v1.y);
+                let (drawn_x2, drawn_y2) = self.adjust_coord(&v2.x, &v2.y);
 
                 canvas
                     .draw_line(
-                        Point::new(
-                            drawn_x1 as i32 + Self::MULTIPLIER as i32,
-                            drawn_y1 as i32 + Self::MULTIPLIER as i32,
-                        ),
-                        Point::new(
-                            drawn_x2 as i32 + Self::MULTIPLIER as i32,
-                            drawn_y2 as i32 + Self::MULTIPLIER as i32,
-                        ),
+                        Point::new(drawn_x1, drawn_y1),
+                        Point::new(drawn_x2, drawn_y2),
                     )
                     .unwrap();
             },
