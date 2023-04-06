@@ -1,8 +1,11 @@
-use std::time::{Duration, Instant};
+use std::{
+    cmp,
+    time::{Duration, Instant},
+};
 
 use sdl2::{event::Event, keyboard::Keycode, pixels::Color, rect::Point, render::WindowCanvas};
 
-use crate::wad::{LevelData, Linedef, Vertex};
+use crate::wad::{LevelData, Linedef, Thing, Vertex, WadFile};
 
 pub struct Interface {
     x_offset: i16,
@@ -29,8 +32,12 @@ impl Interface {
         }
     }
 
-    pub fn run(&mut self, level: &LevelData) {
+    pub fn run(&mut self, wad: &WadFile) {
+        let mut current_level = 0;
+        let level_count = wad.levels.len();
+        let mut level = &wad.levels[current_level];
         self.find_bounds(level);
+        let player = level.things.iter().find(|t| t.thing_type == 1).unwrap();
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
@@ -65,6 +72,26 @@ impl Interface {
                         keycode: Some(Keycode::Q),
                         ..
                     } => break 'running,
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Period),
+                        ..
+                    } => {
+                        current_level = cmp::min(level_count - 1, current_level + 1);
+                        level = &wad.levels[current_level];
+                        self.find_bounds(level);
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Comma),
+                        ..
+                    } => {
+                        current_level = if current_level > 0 {
+                            current_level - 1
+                        } else {
+                            0
+                        };
+                        level = &wad.levels[current_level];
+                        self.find_bounds(level);
+                    }
                     _ => {}
                 }
             }
@@ -72,6 +99,7 @@ impl Interface {
             // DRAW SOMETHING
             self.draw_lines(level, &mut canvas);
             self.draw_verts(level, &mut canvas);
+            self.draw_player(player, &mut canvas);
 
             canvas.present();
             let cycle_time = Instant::now() - loop_start;
@@ -119,6 +147,12 @@ impl Interface {
             drawn_x as i32 + Self::MULTIPLIER as i32,
             drawn_y as i32 + Self::MULTIPLIER as i32,
         )
+    }
+
+    fn draw_player(&self, player: &Thing, canvas: &mut WindowCanvas) {
+        let (x, y) = self.adjust_coord(&player.x, &player.y);
+        canvas.set_draw_color(Color::GREEN);
+        canvas.draw_point(Point::new(x, y)).unwrap();
     }
 
     fn draw_verts(&self, level: &LevelData, canvas: &mut WindowCanvas) {
