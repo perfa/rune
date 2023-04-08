@@ -45,7 +45,7 @@ impl Interface {
     pub const WIDTH: u32 = 320;
     pub const HEIGHT: u32 = 240;
     pub const MULTIPLIER: u32 = 4;
-    pub const VIEW_ANGLE: f32 = consts::PI / 3.;
+    pub const VIEW_ANGLE: f32 = consts::PI / 2.;
 
     pub fn new() -> Self {
         Interface {
@@ -139,6 +139,7 @@ impl Interface {
             self.handle_input(&mut player, &mut event_pump);
 
             // DRAW SOMETHING
+            self.draw_grid(&mut canvas);
             self.draw_lines(level, &mut canvas);
             self.draw_verts(level, &mut canvas);
             self.draw_player(&player, &mut canvas);
@@ -315,6 +316,34 @@ impl Interface {
             canvas
                 .draw_rect(Rect::new(x2, y2, w2 as u32, h2 as u32))
                 .unwrap();
+        }
+    }
+
+    fn draw_grid(&self, canvas: &mut WindowCanvas) {
+        const GRID_SPACING: i16 = 128;
+        let d_start_x = self.x_offset.rem_euclid(GRID_SPACING);
+        let d_start_y = self.x_offset.rem_euclid(GRID_SPACING);
+
+        let mut x = if self.x_offset < 0 {
+            self.x_offset + d_start_x
+        } else {
+            self.x_offset - d_start_x
+        };
+        let origin_x = x;
+        let mut y = if self.y_offset < 0 {
+            self.y_offset + d_start_y
+        } else {
+            self.y_offset - d_start_y
+        };
+        while y < self.y_offset + self.level_height {
+            while x < self.x_offset + self.level_width {
+                let (x1, y1) = self.adjust_coord(&x, &y);
+                canvas.set_draw_color(Color::WHITE);
+                canvas.draw_point(Point::new(x1, y1)).unwrap();
+                x += 128;
+            }
+            x = origin_x;
+            y += 128;
         }
     }
 
