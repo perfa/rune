@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    f64::consts,
+    f32::consts,
     time::{Duration, Instant},
 };
 
@@ -15,9 +15,9 @@ use sdl2::{
 use crate::wad::{LevelData, Linedef, Vertex, WadFile};
 
 struct Player {
-    x: i16,
-    y: i16,
-    angle: f64,
+    x: f32,
+    y: f32,
+    angle: f32,
 }
 
 pub struct Interface {
@@ -25,8 +25,8 @@ pub struct Interface {
     y_offset: i16,
     level_width: i16,
     level_height: i16,
-    x_multiplier: f64,
-    y_multiplier: f64,
+    x_multiplier: f32,
+    y_multiplier: f32,
 }
 
 impl Interface {
@@ -52,8 +52,8 @@ impl Interface {
         self.find_bounds(level);
         let player_thing = level.things.iter().find(|t| t.thing_type == 1).unwrap();
         let mut player = Player {
-            x: player_thing.x,
-            y: player_thing.y,
+            x: f32::from(player_thing.x),
+            y: f32::from(player_thing.y),
             angle: player_thing.angle_facing,
         };
         let sdl_context = sdl2::init().unwrap();
@@ -97,8 +97,8 @@ impl Interface {
                         current_level = cmp::min(level_count - 1, current_level + 1);
                         level = &wad.levels[current_level];
                         let player_thing = level.things.iter().find(|t| t.thing_type == 1).unwrap();
-                        player.x = player_thing.x;
-                        player.y = player_thing.y;
+                        player.x = f32::from(player_thing.x);
+                        player.y = f32::from(player_thing.y);
                         player.angle = player_thing.angle_facing;
                         self.find_bounds(level);
                     }
@@ -113,8 +113,8 @@ impl Interface {
                         };
                         level = &wad.levels[current_level];
                         let player_thing = level.things.iter().find(|t| t.thing_type == 1).unwrap();
-                        player.x = player_thing.x;
-                        player.y = player_thing.y;
+                        player.x = f32::from(player_thing.x);
+                        player.y = f32::from(player_thing.y);
                         player.angle = player_thing.angle_facing;
                         self.find_bounds(level);
                     }
@@ -140,15 +140,15 @@ impl Interface {
                         keycode: Some(Keycode::Up),
                         ..
                     } => {
-                        player.x += 3 * (f64::cos(player.angle + consts::PI) * 2.).floor() as i16;
-                        player.y -= 3 * (f64::sin(player.angle + consts::PI) * 2.).floor() as i16;
+                        player.x += 3. * (f32::cos(player.angle + consts::PI) * 2.).floor();
+                        player.y -= 3. * (f32::sin(player.angle + consts::PI) * 2.).floor();
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::Down),
                         ..
                     } => {
-                        player.x -= 3 * (f64::cos(player.angle + consts::PI) * 2.).floor() as i16;
-                        player.y += 3 * (f64::sin(player.angle + consts::PI) * 2.).floor() as i16;
+                        player.x -= 3. * (f32::cos(player.angle + consts::PI) * 2.).floor();
+                        player.y += 3. * (f32::sin(player.angle + consts::PI) * 2.).floor();
                     }
                     _ => {}
                 }
@@ -195,9 +195,9 @@ impl Interface {
         self.level_width = max_x - min_x;
         self.level_height = max_y - min_y;
         self.x_multiplier =
-            f64::from((Self::WIDTH - 12) * Self::MULTIPLIER) / self.level_width as f64 * 1000.;
+            ((Self::WIDTH - 12) * Self::MULTIPLIER) as f32 / f32::from(self.level_width) * 1000.;
         self.y_multiplier =
-            f64::from((Self::HEIGHT - 12) * Self::MULTIPLIER) / self.level_height as f64 * 1000.;
+            ((Self::HEIGHT - 12) * Self::MULTIPLIER) as f32 / self.level_height as f32 * 1000.;
     }
 
     fn adjust_coord(&self, x: &i16, y: &i16) -> (i32, i32) {
@@ -220,7 +220,9 @@ impl Interface {
     }
 
     fn draw_sectors(&self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
-        let ssec = level.nodes.find(player.x, player.y);
+        let ssec = level
+            .nodes
+            .find(player.x.trunc() as i16, player.y.trunc() as i16);
         canvas.set_draw_color(Color::YELLOW);
         level.segs[ssec.first_segment..ssec.first_segment + ssec.segment_count]
             .into_iter()
@@ -247,15 +249,15 @@ impl Interface {
     }
 
     fn draw_player(&self, player: &Player, canvas: &mut WindowCanvas) {
-        let (x, y) = self.adjust_coord(&player.x, &player.y);
+        let (x, y) = self.adjust_coord(&(player.x.trunc() as i16), &(player.y.trunc() as i16));
         let (x1, y1) = (x - 2, y - 2);
         canvas.set_draw_color(Color::GREEN);
         canvas.draw_rect(Rect::new(x1, y1, 4, 4)).unwrap();
 
-        let view_x1 = (f64::cos(player.angle + consts::PI) * 2.).floor() as i32 + x;
-        let view_y1 = (f64::sin(player.angle + consts::PI) * 2.).floor() as i32 + y;
-        let view_x2 = (f64::cos(player.angle + consts::PI) * 7.).floor() as i32 + x;
-        let view_y2 = (f64::sin(player.angle + consts::PI) * 7.).floor() as i32 + y;
+        let view_x1 = (f32::cos(player.angle + consts::PI) * 2.).floor() as i32 + x;
+        let view_y1 = (f32::sin(player.angle + consts::PI) * 2.).floor() as i32 + y;
+        let view_x2 = (f32::cos(player.angle + consts::PI) * 7.).floor() as i32 + x;
+        let view_y2 = (f32::sin(player.angle + consts::PI) * 7.).floor() as i32 + y;
         canvas
             .draw_line(Point::new(view_x1, view_y1), Point::new(view_x2, view_y2))
             .unwrap();

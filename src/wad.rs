@@ -18,7 +18,7 @@ pub struct FileLump {
 pub struct Thing {
     pub x: i16,
     pub y: i16,
-    pub angle_facing: f64,
+    pub angle_facing: f32,
     pub thing_type: i16,
     pub flags: i16,
 }
@@ -54,7 +54,7 @@ pub struct Vertex {
 pub struct Segment {
     pub start_vert: usize,
     pub end_vert: usize,
-    pub angle: f64,
+    pub angle: f32,
     pub linedef: usize,
     pub dir_like_linedef: bool,
     pub offset: i16, // May be u16 really
@@ -241,9 +241,9 @@ impl WadFile {
         i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
     }
 
-    fn get_angle(bytes: &[u8]) -> f64 {
+    fn get_angle(bytes: &[u8]) -> f32 {
         let binary_angle = u16::from_le_bytes([bytes[0], bytes[1]]);
-        (360_f64 * f64::from(binary_angle) / f64::from(u16::MAX)).to_radians()
+        (360_f32 * f32::from(binary_angle) / f32::from(u16::MAX)).to_radians()
     }
 
     fn get_8char_string(bytes: &[u8]) -> String {
@@ -323,7 +323,7 @@ impl WadFile {
                 things.push(Thing {
                     x: WadFile::get_i16(&bytes[thing_offset..thing_offset + 2]),
                     y: WadFile::get_i16(&bytes[thing_offset + 2..thing_offset + 4]),
-                    angle_facing: f64::from(WadFile::get_i16(
+                    angle_facing: f32::from(WadFile::get_i16(
                         &bytes[thing_offset + 4..thing_offset + 6],
                     ))
                     .to_radians(),
