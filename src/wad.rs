@@ -51,7 +51,7 @@ pub struct Vertex {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Seg {
+pub struct Segment {
     pub start_vert: usize,
     pub end_vert: usize,
     pub angle: f64,
@@ -70,11 +70,37 @@ pub struct SubSector {
 pub struct BBox {
     pub top: i16,
     pub left: i16,
-    pub bottom: i16,
-    pub right: i16,
+    pub width: i16,
+    pub height: i16,
+}
+
+// Child pointer can identify node or leaf (SSeg)
+#[derive(Clone, Copy, Debug)]
+pub enum ChildIdx {
+    Node(i16),
+    Subsector(i16),
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct MapNode {
+    pub partition_x: i16,
+    pub partition_y: i16,
+    pub delta_x: i16,
+    pub delta_y: i16,
+    pub right_bbox: BBox,
+    pub left_bbox: BBox,
+    pub right_child: ChildIdx,
+    pub left_child: ChildIdx,
+    pub id: usize,
+}
+
+#[derive(Debug)]
+pub enum Child {
+    NODE(Box<Node>),
+    SUBSECTOR(SubSector),
+}
+
+#[derive(Debug)]
 pub struct Node {
     pub partition_x: i16,
     pub partition_y: i16,
@@ -82,8 +108,86 @@ pub struct Node {
     pub delta_y: i16,
     pub right_bbox: BBox,
     pub left_bbox: BBox,
-    pub right_child: usize,
-    pub left_child: usize,
+    pub right_child: Option<Child>,
+    pub left_child: Option<Child>,
+}
+
+impl Node {
+    pub fn new(n: &MapNode, map_nodes: &Vec<MapNode>, subsectors: Vec<SubSector>) -> Self {
+        let mut new = Node {
+            partition_x: n.partition_x,
+            partition_y: n.partition_y,
+            delta_x: n.delta_x,
+            delta_y: n.delta_y,
+            right_bbox: n.right_bbox,
+            left_bbox: n.left_bbox,
+            right_child: None,
+            left_child: None,
+        };
+        match n.left_child {
+            ChildIdx::Node(child_map) => {
+                new.left_child = Some(Child::NODE(Box::new(Node::new(
+                    map_nodes.get(child_map as usize).unwrap(),
+                    map_nodes,
+                    subsectors.iter().map(|ss| ss.clone()).collect(),
+                ))))
+            }
+            ChildIdx::Subsector(ssec) => {
+                new.left_child = Some(Child::SUBSECTOR(
+                    subsectors.get(ssec as usize).unwrap().clone(),
+                ))
+            }
+        }
+        match n.right_child {
+            ChildIdx::Node(child_map) => {
+                new.right_child = Some(Child::NODE(Box::new(Node::new(
+                    map_nodes.get(child_map as usize).unwrap(),
+                    map_nodes,
+                    subsectors.iter().map(|ss| ss.clone()).collect(),
+                ))))
+            }
+            ChildIdx::Subsector(ssec) => {
+                let x = subsectors[ssec as usize].clone();
+                new.right_child = Some(Child::SUBSECTOR(x))
+            }
+        }
+
+        new
+    }
+
+    pub fn find(&self, x: i16, y: i16) -> &SubSector {
+        let child = if self.is_point_behind(x, y) {
+            self.left_child.as_ref().unwrap()
+        } else {
+            self.right_child.as_ref().unwrap()
+        };
+        match child {
+            Child::NODE(n) => n.find(x, y),
+            Child::SUBSECTOR(s) => &s,
+        }
+    }
+
+    fn is_point_behind(&self, x: i16, y: i16) -> bool {
+        if self.delta_x == 0 {
+            if x <= self.partition_x {
+                return self.delta_y > 0;
+            } else {
+                return self.delta_y < 0;
+            }
+        }
+        if self.delta_y == 0 {
+            if y <= self.partition_y {
+                return self.delta_x < 0;
+            } else {
+                return self.delta_x > 0;
+            }
+        }
+
+        let x2 = self.partition_x + self.delta_x;
+        let y2 = self.partition_y + self.delta_y;
+        return (x2 - self.partition_x) as i32 * (y - self.partition_y) as i32
+            > (y2 - self.partition_y) as i32 * (x - self.partition_x) as i32;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -102,9 +206,9 @@ pub struct LevelData {
     pub linedefs: Vec<Linedef>,
     pub sidedefs: Vec<Sidedef>,
     pub vertexes: Vec<Vertex>,
-    pub segs: Vec<Seg>,
-    pub subsectors: Vec<SubSector>,
-    pub nodes: Vec<Node>,
+    pub segs: Vec<Segment>,
+    pub subsectors: Vec<Box<SubSector>>,
+    pub nodes: Node,
     pub sectors: Vec<Sector>,
 }
 
@@ -118,6 +222,19 @@ pub struct WadFile {
 impl WadFile {
     fn get_i16(bytes: &[u8]) -> i16 {
         i16::from_le_bytes([bytes[0], bytes[1]])
+    }
+
+    fn get_child(bytes: &[u8]) -> ChildIdx {
+        let val = u16::from_le_bytes([bytes[0], bytes[1]]);
+        if val & 0x8000 == 0 {
+            ChildIdx::Node(val as i16)
+        } else {
+            if val == 0xFFFF {
+                ChildIdx::Subsector(0)
+            } else {
+                ChildIdx::Subsector((val ^ 0x8000) as i16)
+            }
+        }
     }
 
     fn get_i32(bytes: &[u8]) -> i32 {
@@ -144,11 +261,15 @@ impl WadFile {
     }
 
     fn get_bbox(bytes: &[u8]) -> BBox {
+        let top = WadFile::get_i16(&bytes[0..2]);
+        let bottom = WadFile::get_i16(&bytes[2..4]);
+        let left = WadFile::get_i16(&bytes[4..6]);
+        let right = WadFile::get_i16(&bytes[6..8]);
         BBox {
-            top: WadFile::get_i16(&bytes[0..2]),
-            left: WadFile::get_i16(&bytes[2..4]),
-            bottom: WadFile::get_i16(&bytes[4..6]),
-            right: WadFile::get_i16(&bytes[6..8]),
+            left,
+            top,
+            width: right - left,
+            height: top - bottom,
         }
     }
 
@@ -174,6 +295,14 @@ impl WadFile {
                 name: WadFile::get_8char_string(&bytes[name_idx..name_idx + 8]),
             })
         }
+
+        // println!("Directory\n=========");
+        // directory.iter().for_each(|lump| {
+        //     println!(
+        //         "* {} - Offset {} - Size {}",
+        //         lump.name, lump.file_pos, lump.size
+        //     );
+        // });
 
         let mut levels = Vec::with_capacity(9);
         let re = Regex::new(r"^E[1234]M[0-9]").unwrap();
@@ -264,10 +393,10 @@ impl WadFile {
             lump_idx += 1;
             let seg_lump = &directory[lump_idx];
             debug_assert!(seg_lump.name == "SEGS");
-            let mut segs: Vec<Seg> = Vec::with_capacity(seg_lump.size / 12); // 12 bytes/each
+            let mut segs: Vec<Segment> = Vec::with_capacity(seg_lump.size / 12); // 12 bytes/each
             for seg_idx in 0..segs.capacity() {
                 let seg_offset = seg_lump.file_pos + seg_idx * 12;
-                segs.push(Seg {
+                segs.push(Segment {
                     start_vert: WadFile::get_i16(&bytes[seg_offset..seg_offset + 2]) as usize,
                     end_vert: WadFile::get_i16(&bytes[seg_offset + 2..seg_offset + 4]) as usize,
                     angle: WadFile::get_angle(&bytes[seg_offset + 4..seg_offset + 6]),
@@ -281,37 +410,44 @@ impl WadFile {
             lump_idx += 1;
             let subsector_lump = &directory[lump_idx];
             debug_assert!(subsector_lump.name == "SSECTORS");
-            let mut subsectors: Vec<SubSector> = Vec::with_capacity(subsector_lump.size / 12); // 12 bytes/each
+            let mut subsectors: Vec<Box<SubSector>> = Vec::with_capacity(subsector_lump.size / 4); // 4 bytes/each
             for subsector_idx in 0..subsectors.capacity() {
-                let subsector_offset = subsector_lump.file_pos + subsector_idx * 12;
-                subsectors.push(SubSector {
+                let subsector_offset = subsector_lump.file_pos + subsector_idx * 4;
+                subsectors.push(Box::new(SubSector {
                     segment_count: WadFile::get_i16(&bytes[subsector_offset..subsector_offset + 2])
                         as usize,
                     first_segment: WadFile::get_i16(
                         &bytes[subsector_offset + 2..subsector_offset + 4],
                     ) as usize,
-                })
+                }))
             }
 
             lump_idx += 1;
             let node_lump = &directory[lump_idx];
             debug_assert!(node_lump.name == "NODES");
-            let mut nodes: Vec<Node> = Vec::with_capacity(node_lump.size / 28); // 28 bytes/each
-            for node_idx in 0..nodes.capacity() {
+            let mut map_nodes: Vec<MapNode> = Vec::with_capacity(node_lump.size / 28); // 28 bytes/each
+            for node_idx in 0..map_nodes.capacity() {
                 let node_offset = node_lump.file_pos + node_idx * 28;
-                nodes.push(Node {
+                map_nodes.push(MapNode {
+                    id: node_idx,
                     partition_x: WadFile::get_i16(&bytes[node_offset..node_offset + 2]),
                     partition_y: WadFile::get_i16(&bytes[node_offset + 2..node_offset + 4]),
                     delta_x: WadFile::get_i16(&bytes[node_offset + 4..node_offset + 6]),
                     delta_y: WadFile::get_i16(&bytes[node_offset + 6..node_offset + 8]),
                     right_bbox: WadFile::get_bbox(&bytes[node_offset + 8..node_offset + 16]),
                     left_bbox: WadFile::get_bbox(&bytes[node_offset + 16..node_offset + 24]),
-                    right_child: WadFile::get_i16(&bytes[node_offset + 24..node_offset + 26])
-                        as usize,
-                    left_child: WadFile::get_i16(&bytes[node_offset + 26..node_offset + 28])
-                        as usize,
+                    right_child: WadFile::get_child(&bytes[node_offset + 24..node_offset + 26]),
+                    left_child: WadFile::get_child(&bytes[node_offset + 26..node_offset + 28]),
                 })
             }
+
+            let root_map_node = map_nodes.pop().unwrap();
+            let nodes: Node = Node::new(
+                &root_map_node,
+                &map_nodes,
+                subsectors.iter().map(|ss| *ss.clone()).collect(),
+            );
+            // println!("BSP: {:?}", nodes);
 
             lump_idx += 1;
             let sector_lump = &directory[lump_idx];
@@ -353,7 +489,7 @@ impl WadFile {
                 subsectors,
                 nodes,
                 sectors,
-            })
+            });
         }
 
         WadFile {
