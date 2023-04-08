@@ -1,18 +1,28 @@
 use std::{
     cmp,
+    collections::HashSet,
     f32::consts,
     time::{Duration, Instant},
 };
 
 use sdl2::{
     event::Event,
-    keyboard::Keycode,
+    keyboard::{Keycode, Scancode},
     pixels::Color,
     rect::{Point, Rect},
     render::WindowCanvas,
+    EventPump,
 };
 
-use crate::wad::{LevelData, Linedef, Vertex, WadFile};
+use crate::wad::{Child, LevelData, Linedef, Vertex, WadFile};
+
+enum GameState {
+    Viewing,
+    Playing,
+    Paused,
+    TitleScreen,
+    GameOver,
+}
 
 struct Player {
     x: f32,
@@ -27,12 +37,15 @@ pub struct Interface {
     level_height: i16,
     x_multiplier: f32,
     y_multiplier: f32,
+    state: GameState,
+    pressed_keys: HashSet<Scancode>,
 }
 
 impl Interface {
     pub const WIDTH: u32 = 320;
     pub const HEIGHT: u32 = 240;
     pub const MULTIPLIER: u32 = 4;
+    pub const VIEW_ANGLE: f32 = consts::PI / 3.;
 
     pub fn new() -> Self {
         Interface {
@@ -42,6 +55,8 @@ impl Interface {
             level_height: Self::HEIGHT as i16,
             x_multiplier: 1.0,
             y_multiplier: 1.0,
+            pressed_keys: HashSet::new(),
+            state: GameState::Viewing,
         }
     }
 
@@ -118,41 +133,10 @@ impl Interface {
                         player.angle = player_thing.angle_facing;
                         self.find_bounds(level);
                     }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Left),
-                        ..
-                    } => {
-                        player.angle -= 0.34;
-                        if player.angle < 0.0 {
-                            player.angle += 2.0 * consts::PI;
-                        }
-                    }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Right),
-                        ..
-                    } => {
-                        player.angle += 0.34;
-                        if player.angle > 2.0 * consts::PI {
-                            player.angle -= 2.0 * consts::PI;
-                        }
-                    }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Up),
-                        ..
-                    } => {
-                        player.x += 3. * (f32::cos(player.angle + consts::PI) * 2.).floor();
-                        player.y -= 3. * (f32::sin(player.angle + consts::PI) * 2.).floor();
-                    }
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Down),
-                        ..
-                    } => {
-                        player.x -= 3. * (f32::cos(player.angle + consts::PI) * 2.).floor();
-                        player.y += 3. * (f32::sin(player.angle + consts::PI) * 2.).floor();
-                    }
                     _ => {}
                 }
             }
+            self.handle_input(&mut player, &mut event_pump);
 
             // DRAW SOMETHING
             self.draw_lines(level, &mut canvas);
@@ -254,12 +238,33 @@ impl Interface {
         canvas.set_draw_color(Color::GREEN);
         canvas.draw_rect(Rect::new(x1, y1, 4, 4)).unwrap();
 
-        let view_x1 = (f32::cos(player.angle + consts::PI) * 2.).floor() as i32 + x;
-        let view_y1 = (f32::sin(player.angle + consts::PI) * 2.).floor() as i32 + y;
-        let view_x2 = (f32::cos(player.angle + consts::PI) * 7.).floor() as i32 + x;
-        let view_y2 = (f32::sin(player.angle + consts::PI) * 7.).floor() as i32 + y;
+        let view_x1 = (f32::cos(player.angle + consts::PI) * 2.).trunc() as i32 + x;
+        let view_y1 = (f32::sin(player.angle + consts::PI) * 2.).trunc() as i32 + y;
+        let view_x2 = (f32::cos(player.angle + consts::PI) * 7.).trunc() as i32 + x;
+        let view_y2 = (f32::sin(player.angle + consts::PI) * 7.).trunc() as i32 + y;
         canvas
             .draw_line(Point::new(view_x1, view_y1), Point::new(view_x2, view_y2))
+            .unwrap();
+
+        canvas.set_draw_color(Color::CYAN);
+        let left_los_x = (f32::cos(player.angle + consts::PI + (Self::VIEW_ANGLE / 2.)) * 2000.)
+            .trunc() as i32
+            + x;
+        let left_los_y = (f32::sin(player.angle + consts::PI + (Self::VIEW_ANGLE / 2.)) * 2000.)
+            .trunc() as i32
+            + y;
+
+        let right_los_x = (f32::cos(player.angle + consts::PI - (Self::VIEW_ANGLE / 2.)) * 2000.)
+            .trunc() as i32
+            + x;
+        let right_los_y = (f32::sin(player.angle + consts::PI - (Self::VIEW_ANGLE / 2.)) * 2000.)
+            .trunc() as i32
+            + y;
+        canvas
+            .draw_line(Point::new(x, y), Point::new(left_los_x, left_los_y))
+            .unwrap();
+        canvas
+            .draw_line(Point::new(x, y), Point::new(right_los_x, right_los_y))
             .unwrap();
     }
 
@@ -296,28 +301,76 @@ impl Interface {
     }
 
     fn draw_node(&self, level: &LevelData, canvas: &mut WindowCanvas) {
-        let n = &level.nodes;
-        let (x1, y1) = self.adjust_coord(&n.left_bbox.left, &n.left_bbox.top);
-        let (w1, h1) = self.adjust_dim(&n.left_bbox.width, &n.left_bbox.height);
-        canvas.set_draw_color(Color::RED);
-        canvas
-            .draw_rect(Rect::new(x1, y1, w1 as u32, h1 as u32))
-            .unwrap();
+        if let Some(Child::NODE(n)) = &level.nodes.left_child {
+            let (x1, y1) = self.adjust_coord(&n.left_bbox.left, &n.left_bbox.top);
+            let (w1, h1) = self.adjust_dim(&n.left_bbox.width, &n.left_bbox.height);
+            canvas.set_draw_color(Color::RED);
+            canvas
+                .draw_rect(Rect::new(x1, y1, w1 as u32, h1 as u32))
+                .unwrap();
 
-        let (x2, y2) = self.adjust_coord(&n.right_bbox.left, &n.right_bbox.top);
-        let (w2, h2) = self.adjust_dim(&n.right_bbox.width, &n.right_bbox.height);
-        canvas.set_draw_color(Color::GREEN);
-        canvas
-            .draw_rect(Rect::new(x2, y2, w2 as u32, h2 as u32))
-            .unwrap();
+            let (x2, y2) = self.adjust_coord(&n.right_bbox.left, &n.right_bbox.top);
+            let (w2, h2) = self.adjust_dim(&n.right_bbox.width, &n.right_bbox.height);
+            canvas.set_draw_color(Color::GREEN);
+            canvas
+                .draw_rect(Rect::new(x2, y2, w2 as u32, h2 as u32))
+                .unwrap();
+        }
+    }
 
-        let (x1, y1) = self.adjust_coord(&n.partition_x, &n.partition_y);
-        //let (dx, dy) = self.adjust_dim(&n.delta_x, &n.delta_y);
-        canvas.set_draw_color(Color::WHITE);
-        canvas.draw_point(Point::new(x1, y1)).unwrap();
-        // canvas.set_draw_color(Color::BLUE);
-        // canvas
-        //     .draw_line(Point::new(x1, y1), Point::new(x1 + dx, y1 + dy))
-        //     .unwrap();
+    fn get_scancodes(old: &HashSet<Scancode>, new: &HashSet<Scancode>) -> HashSet<Scancode> {
+        new - old
+    }
+
+    fn handle_input(&mut self, player: &mut Player, event_pump: &mut EventPump) {
+        let scancodes: HashSet<Scancode> =
+            event_pump.keyboard_state().pressed_scancodes().collect();
+
+        let newly_pressed: HashSet<Scancode> =
+            Interface::get_scancodes(&self.pressed_keys, &scancodes);
+        self.pressed_keys = scancodes;
+
+        match self.state {
+            GameState::TitleScreen => {
+                if newly_pressed.contains(&Scancode::Space) {
+                    self.state = GameState::Playing
+                }
+            }
+            GameState::Playing | GameState::Viewing => {
+                if newly_pressed.contains(&Scancode::P) {
+                    self.state = GameState::Paused;
+                }
+
+                if self.pressed_keys.contains(&Scancode::Up) {
+                    player.x += f32::cos(player.angle + consts::PI) * 3.;
+                    player.y -= f32::sin(player.angle + consts::PI) * 3.;
+                } else if self.pressed_keys.contains(&Scancode::Down) {
+                    player.x -= f32::cos(player.angle + consts::PI) * 3.;
+                    player.y += f32::sin(player.angle + consts::PI) * 3.;
+                }
+                if self.pressed_keys.contains(&Scancode::Left) {
+                    player.angle -= 0.05;
+                    if player.angle < 0.0 {
+                        player.angle += 2.0 * consts::PI;
+                    }
+                } else if self.pressed_keys.contains(&Scancode::Right) {
+                    player.angle += 0.05;
+                    if player.angle > 2.0 * consts::PI {
+                        player.angle -= 2.0 * consts::PI;
+                    }
+                }
+            }
+            GameState::Paused => {
+                if newly_pressed.contains(&Scancode::P) {
+                    self.state = GameState::Playing;
+                }
+            }
+            GameState::GameOver => {
+                if newly_pressed.contains(&Scancode::Space) {
+                    // TODO: Reset
+                    self.state = GameState::Playing
+                }
+            }
+        }
     }
 }
