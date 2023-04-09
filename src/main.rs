@@ -1,4 +1,5 @@
 mod interface;
+mod renderer;
 mod wad;
 
 use wad::WadFile;
