@@ -14,7 +14,7 @@ use sdl2::{
     EventPump,
 };
 
-use crate::wad::{Child, LevelData, Linedef, Vertex, WadFile};
+use crate::wad::{Child, LevelData, Linedef, Node, SubSector, Vertex, WadFile};
 
 enum GameState {
     Viewing,
@@ -45,7 +45,6 @@ impl Interface {
     pub const WIDTH: u32 = 320;
     pub const HEIGHT: u32 = 240;
     pub const MULTIPLIER: u32 = 4;
-    pub const VIEW_ANGLE: f32 = consts::PI / 2.;
 
     pub fn new() -> Self {
         Interface {
@@ -140,11 +139,11 @@ impl Interface {
 
             // DRAW SOMETHING
             self.draw_grid(&mut canvas);
-            self.draw_lines(level, &mut canvas);
+            self._draw_lines(level, &mut canvas);
             self.draw_verts(level, &mut canvas);
             self.draw_player(&player, &mut canvas);
-            self.draw_node(level, &mut canvas);
-            self.draw_sectors(&player, level, &mut canvas);
+            self.draw_node(&player, level, &mut canvas);
+            // self.draw_sectors(&player, level, &mut canvas);
 
             canvas.present();
             let cycle_time = Instant::now() - loop_start;
@@ -185,7 +184,7 @@ impl Interface {
             ((Self::HEIGHT - 12) * Self::MULTIPLIER) as f32 / self.level_height as f32 * 1000.;
     }
 
-    fn adjust_coord(&self, x: &i16, y: &i16) -> (i32, i32) {
+    fn adjust_coord(&self, x: i16, y: i16) -> (i32, i32) {
         let drawn_x = (x - self.x_offset) as i32 * self.x_multiplier.floor() as i32 / 1000;
         let drawn_y = (y - self.y_offset) as i32 * self.y_multiplier.floor() as i32 / 1000;
         (
@@ -195,16 +194,51 @@ impl Interface {
         )
     }
 
-    fn adjust_dim(&self, w: &i16, h: &i16) -> (i32, i32) {
-        let drawn_w = *w as i32 * self.x_multiplier.floor() as i32 / 1000;
-        let drawn_h = *h as i32 * self.y_multiplier.floor() as i32 / 1000;
-        (
-            drawn_w as i32 + Self::MULTIPLIER as i32,
-            drawn_h as i32 + Self::MULTIPLIER as i32,
-        )
+    fn angle_to_vertex(player: &Player, v: &Vertex) -> f32 {
+        let dx = v.x as f32 - player.x;
+        let dy = v.y as f32 - player.y;
+        let raw_angle = dy.atan2(dx);
+
+        if raw_angle < 0. {
+            return raw_angle + (2. * consts::PI);
+        }
+
+        raw_angle
     }
 
-    fn draw_sectors(&self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
+    fn is_seg_visible(player: &Player, v1: &mut Vertex, v2: &mut Vertex) -> Option<(f32, f32)> {
+        let mut a1 = Interface::angle_to_vertex(player, v1);
+        let mut a2 = Interface::angle_to_vertex(player, v2);
+
+        let angle_diff = a1 - a2;
+        if angle_diff >= consts::PI {
+            return None;
+        }
+
+        // Player view is now 0°-90° (0-π/2) and tests will be dead simple
+        let mut rotated_a1 = a1 - player.angle + consts::FRAC_PI_4;
+        if rotated_a1 < 0. {
+            rotated_a1 += consts::PI * 2.;
+        } else if rotated_a1 > consts::PI * 2. {
+            rotated_a1 -= consts::PI * 2.;
+        }
+
+        if rotated_a1 > consts::FRAC_PI_2 {
+            rotated_a1 -= consts::FRAC_PI_2;
+            a1 = player.angle + consts::FRAC_PI_4;
+            if rotated_a1 >= angle_diff {
+                return None; // both left of view
+            }
+        }
+
+        let rotated_a2 = consts::FRAC_PI_4 - a2; // distance left edge - our angle
+        if rotated_a2 > consts::FRAC_PI_2 {
+            a2 = player.angle - consts::FRAC_PI_4;
+        }
+        Some((a1, a2))
+    }
+
+    fn _draw_sectors(&self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
         let ssec = level
             .nodes
             .find(player.x.trunc() as i16, player.y.trunc() as i16);
@@ -214,53 +248,43 @@ impl Interface {
             .for_each(|seg| {
                 let v_s = level.vertexes.get(seg.start_vert).cloned().unwrap();
                 let v_e = level.vertexes.get(seg.end_vert).cloned().unwrap();
-                let (x1, y1) = self.adjust_coord(&v_s.x, &v_s.y);
-                let (x2, y2) = self.adjust_coord(&v_e.x, &v_e.y);
+                let (x1, y1) = self.adjust_coord(v_s.x, v_s.y);
+                let (x2, y2) = self.adjust_coord(v_e.x, v_e.y);
                 canvas
                     .draw_line(Point::new(x1, y1), Point::new(x2, y2))
                     .unwrap();
             });
-        // canvas.set_draw_color(Color::YELLOW);
-
-        // level.segs[s..e].iter().for_each(|seg| {
-        //     let v1 = level.vertexes[seg.start_vert as usize];
-        //     let v2 = level.vertexes[seg.end_vert as usize];
-        //     let (x1, y1) = self.adjust_coord(&v1.x, &v1.y);
-        //     let (x2, y2) = self.adjust_coord(&v2.x, &v2.y);
-        //     canvas
-        //         .draw_line(Point::new(x1, y1), Point::new(x2, y2))
-        //         .unwrap();
-        // });
     }
 
     fn draw_player(&self, player: &Player, canvas: &mut WindowCanvas) {
-        let (x, y) = self.adjust_coord(&(player.x.trunc() as i16), &(player.y.trunc() as i16));
+        // println!("{} ({})", player.angle, player.angle.to_degrees());
+        let (x, y) = self.adjust_coord((player.x.trunc() as i16), (player.y.trunc() as i16));
         let (x1, y1) = (x - 2, y - 2);
         canvas.set_draw_color(Color::GREEN);
         canvas.draw_rect(Rect::new(x1, y1, 4, 4)).unwrap();
 
-        let view_x1 = (f32::cos(player.angle + consts::PI) * 2.).trunc() as i32 + x;
-        let view_y1 = (f32::sin(player.angle + consts::PI) * 2.).trunc() as i32 + y;
-        let view_x2 = (f32::cos(player.angle + consts::PI) * 7.).trunc() as i32 + x;
-        let view_y2 = (f32::sin(player.angle + consts::PI) * 7.).trunc() as i32 + y;
+        let (view_x1, view_y1) = self.adjust_coord(
+            ((player.angle.cos() * 2.) + player.x).trunc() as i16,
+            ((player.angle.sin() * 2.) + player.y).trunc() as i16,
+        );
+        let (view_x2, view_y2) = self.adjust_coord(
+            ((player.angle.cos() * 7.) + player.x).trunc() as i16,
+            ((player.angle.sin() * 7.) + player.y).trunc() as i16,
+        );
         canvas
             .draw_line(Point::new(view_x1, view_y1), Point::new(view_x2, view_y2))
             .unwrap();
 
         canvas.set_draw_color(Color::CYAN);
-        let left_los_x = (f32::cos(player.angle + consts::PI + (Self::VIEW_ANGLE / 2.)) * 2000.)
-            .trunc() as i32
-            + x;
-        let left_los_y = (f32::sin(player.angle + consts::PI + (Self::VIEW_ANGLE / 2.)) * 2000.)
-            .trunc() as i32
-            + y;
+        let (left_los_x, left_los_y) = self.adjust_coord(
+            ((f32::cos(player.angle + consts::FRAC_PI_4) * 2000.) + player.x).trunc() as i16,
+            ((f32::sin(player.angle + consts::FRAC_PI_4) * 2000.) + player.y).trunc() as i16,
+        );
+        let (right_los_x, right_los_y) = self.adjust_coord(
+            ((f32::cos(player.angle - consts::FRAC_PI_4) * 2000.) + player.x).trunc() as i16,
+            ((f32::sin(player.angle - consts::FRAC_PI_4) * 2000.) + player.y).trunc() as i16,
+        );
 
-        let right_los_x = (f32::cos(player.angle + consts::PI - (Self::VIEW_ANGLE / 2.)) * 2000.)
-            .trunc() as i32
-            + x;
-        let right_los_y = (f32::sin(player.angle + consts::PI - (Self::VIEW_ANGLE / 2.)) * 2000.)
-            .trunc() as i32
-            + y;
         canvas
             .draw_line(Point::new(x, y), Point::new(left_los_x, left_los_y))
             .unwrap();
@@ -270,15 +294,15 @@ impl Interface {
     }
 
     fn draw_verts(&self, level: &LevelData, canvas: &mut WindowCanvas) {
-        canvas.set_draw_color(Color::YELLOW);
+        canvas.set_draw_color(Color::CYAN);
         level.vertexes.iter().for_each(|Vertex { x, y }| {
-            let (drawn_x, drawn_y) = self.adjust_coord(x, y);
+            let (drawn_x, drawn_y) = self.adjust_coord(*x, *y);
 
             canvas.draw_point(Point::new(drawn_x, drawn_y)).unwrap();
         });
     }
 
-    fn draw_lines(&self, level: &LevelData, canvas: &mut WindowCanvas) {
+    fn _draw_lines(&self, level: &LevelData, canvas: &mut WindowCanvas) {
         canvas.set_draw_color(Color::RED);
         level.linedefs.iter().for_each(
             |Linedef {
@@ -288,8 +312,8 @@ impl Interface {
              }| {
                 let v1 = level.vertexes[*start_vert];
                 let v2 = level.vertexes[*end_vert];
-                let (drawn_x1, drawn_y1) = self.adjust_coord(&v1.x, &v1.y);
-                let (drawn_x2, drawn_y2) = self.adjust_coord(&v2.x, &v2.y);
+                let (drawn_x1, drawn_y1) = self.adjust_coord(v1.x, v1.y);
+                let (drawn_x2, drawn_y2) = self.adjust_coord(v2.x, v2.y);
 
                 canvas
                     .draw_line(
@@ -301,22 +325,62 @@ impl Interface {
         );
     }
 
-    fn draw_node(&self, level: &LevelData, canvas: &mut WindowCanvas) {
-        if let Some(Child::NODE(n)) = &level.nodes.left_child {
-            let (x1, y1) = self.adjust_coord(&n.left_bbox.left, &n.left_bbox.top);
-            let (w1, h1) = self.adjust_dim(&n.left_bbox.width, &n.left_bbox.height);
-            canvas.set_draw_color(Color::RED);
-            canvas
-                .draw_rect(Rect::new(x1, y1, w1 as u32, h1 as u32))
-                .unwrap();
+    fn draw_sector(
+        &self,
+        ssec: &SubSector,
+        level: &LevelData,
+        player: &Player,
+        canvas: &mut WindowCanvas,
+    ) {
+        let seg_start = ssec.first_segment;
+        let seg_end = seg_start + ssec.segment_count;
+        level.segs[seg_start..seg_end].iter().for_each(|seg| {
+            let mut v1 = level.vertexes[seg.start_vert].clone();
+            let mut v2 = level.vertexes[seg.end_vert].clone();
+            if let Some((_a1, _a2)) = Interface::is_seg_visible(player, &mut v1, &mut v2) {
+                let (drawn_x1, drawn_y1) = self.adjust_coord(v1.x, v1.y);
+                let (drawn_x2, drawn_y2) = self.adjust_coord(v2.x, v2.y);
 
-            let (x2, y2) = self.adjust_coord(&n.right_bbox.left, &n.right_bbox.top);
-            let (w2, h2) = self.adjust_dim(&n.right_bbox.width, &n.right_bbox.height);
-            canvas.set_draw_color(Color::GREEN);
-            canvas
-                .draw_rect(Rect::new(x2, y2, w2 as u32, h2 as u32))
-                .unwrap();
+                canvas
+                    .draw_line(
+                        Point::new(drawn_x1, drawn_y1),
+                        Point::new(drawn_x2, drawn_y2),
+                    )
+                    .unwrap();
+            }
+        })
+    }
+    fn draw_bsp(&self, node: &Node, level: &LevelData, player: &Player, canvas: &mut WindowCanvas) {
+        match &node.left_child {
+            Some(Child::NODE(n)) => self.draw_bsp(&n, level, player, canvas),
+            Some(Child::SUBSECTOR(ssec)) => self.draw_sector(ssec, level, player, canvas),
+            None => (),
         }
+        match &node.right_child {
+            Some(Child::NODE(n)) => self.draw_bsp(&n, level, player, canvas),
+            Some(Child::SUBSECTOR(ssec)) => self.draw_sector(ssec, level, player, canvas),
+            None => (),
+        }
+    }
+
+    fn draw_node(&self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
+        canvas.set_draw_color(Color::YELLOW);
+        self.draw_bsp(&level.nodes, level, player, canvas);
+        // if let Some(Child::NODE(n)) = &level.nodes.left_child {
+        //     let (x1, y1) = self.adjust_coord(&n.left_bbox.left, &n.left_bbox.top);
+        //     let (w1, h1) = self.adjust_dim(&n.left_bbox.width, &n.left_bbox.height);
+        //     canvas.set_draw_color(Color::RED);
+        //     canvas
+        //         .draw_rect(Rect::new(x1, y1, w1 as u32, h1 as u32))
+        //         .unwrap();
+
+        //     let (x2, y2) = self.adjust_coord(&n.right_bbox.left, &n.right_bbox.top);
+        //     let (w2, h2) = self.adjust_dim(&n.right_bbox.width, &n.right_bbox.height);
+        //     canvas.set_draw_color(Color::GREEN);
+        //     canvas
+        //         .draw_rect(Rect::new(x2, y2, w2 as u32, h2 as u32))
+        //         .unwrap();
+        // }
     }
 
     fn draw_grid(&self, canvas: &mut WindowCanvas) {
@@ -337,7 +401,7 @@ impl Interface {
         };
         while y < self.y_offset + self.level_height {
             while x < self.x_offset + self.level_width {
-                let (x1, y1) = self.adjust_coord(&x, &y);
+                let (x1, y1) = self.adjust_coord(x, y);
                 canvas.set_draw_color(Color::WHITE);
                 canvas.draw_point(Point::new(x1, y1)).unwrap();
                 x += 128;
@@ -371,21 +435,21 @@ impl Interface {
                 }
 
                 if self.pressed_keys.contains(&Scancode::Up) {
-                    player.x += f32::cos(player.angle + consts::PI) * 3.;
-                    player.y -= f32::sin(player.angle + consts::PI) * 3.;
+                    player.x += f32::cos(player.angle) * 3.;
+                    player.y += f32::sin(player.angle) * 3.;
                 } else if self.pressed_keys.contains(&Scancode::Down) {
-                    player.x -= f32::cos(player.angle + consts::PI) * 3.;
-                    player.y += f32::sin(player.angle + consts::PI) * 3.;
+                    player.x -= f32::cos(player.angle) * 3.;
+                    player.y -= f32::sin(player.angle) * 3.;
                 }
                 if self.pressed_keys.contains(&Scancode::Left) {
-                    player.angle -= 0.05;
-                    if player.angle < 0.0 {
-                        player.angle += 2.0 * consts::PI;
-                    }
-                } else if self.pressed_keys.contains(&Scancode::Right) {
                     player.angle += 0.05;
                     if player.angle > 2.0 * consts::PI {
                         player.angle -= 2.0 * consts::PI;
+                    }
+                } else if self.pressed_keys.contains(&Scancode::Right) {
+                    player.angle -= 0.05;
+                    if player.angle < 0.0 {
+                        player.angle += 2.0 * consts::PI;
                     }
                 }
             }

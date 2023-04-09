@@ -167,7 +167,7 @@ impl Node {
         }
     }
 
-    fn is_point_behind(&self, x: i16, y: i16) -> bool {
+    pub fn is_point_behind(&self, x: i16, y: i16) -> bool {
         if self.delta_x == 0 {
             if x <= self.partition_x {
                 return self.delta_y > 0;
