@@ -94,102 +94,6 @@ pub struct MapNode {
     pub id: usize,
 }
 
-#[derive(Debug)]
-pub enum Child {
-    NODE(Box<Node>),
-    SUBSECTOR(SubSector),
-}
-
-#[derive(Debug)]
-pub struct Node {
-    pub partition_x: i16,
-    pub partition_y: i16,
-    pub delta_x: i16,
-    pub delta_y: i16,
-    pub right_bbox: BBox,
-    pub left_bbox: BBox,
-    pub right_child: Option<Child>,
-    pub left_child: Option<Child>,
-}
-
-impl Node {
-    pub fn new(n: &MapNode, map_nodes: &Vec<MapNode>, subsectors: Vec<SubSector>) -> Self {
-        let mut new = Node {
-            partition_x: n.partition_x,
-            partition_y: n.partition_y,
-            delta_x: n.delta_x,
-            delta_y: n.delta_y,
-            right_bbox: n.right_bbox,
-            left_bbox: n.left_bbox,
-            right_child: None,
-            left_child: None,
-        };
-        match n.left_child {
-            ChildIdx::Node(child_map) => {
-                new.left_child = Some(Child::NODE(Box::new(Node::new(
-                    map_nodes.get(child_map as usize).unwrap(),
-                    map_nodes,
-                    subsectors.iter().map(|ss| ss.clone()).collect(),
-                ))))
-            }
-            ChildIdx::Subsector(ssec) => {
-                new.left_child = Some(Child::SUBSECTOR(
-                    subsectors.get(ssec as usize).unwrap().clone(),
-                ))
-            }
-        }
-        match n.right_child {
-            ChildIdx::Node(child_map) => {
-                new.right_child = Some(Child::NODE(Box::new(Node::new(
-                    map_nodes.get(child_map as usize).unwrap(),
-                    map_nodes,
-                    subsectors.iter().map(|ss| ss.clone()).collect(),
-                ))))
-            }
-            ChildIdx::Subsector(ssec) => {
-                let x = subsectors[ssec as usize].clone();
-                new.right_child = Some(Child::SUBSECTOR(x))
-            }
-        }
-
-        new
-    }
-
-    pub fn find(&self, x: i16, y: i16) -> &SubSector {
-        let child = if self.is_point_behind(x, y) {
-            self.left_child.as_ref().unwrap()
-        } else {
-            self.right_child.as_ref().unwrap()
-        };
-        match child {
-            Child::NODE(n) => n.find(x, y),
-            Child::SUBSECTOR(s) => &s,
-        }
-    }
-
-    pub fn is_point_behind(&self, x: i16, y: i16) -> bool {
-        if self.delta_x == 0 {
-            if x <= self.partition_x {
-                return self.delta_y > 0;
-            } else {
-                return self.delta_y < 0;
-            }
-        }
-        if self.delta_y == 0 {
-            if y <= self.partition_y {
-                return self.delta_x < 0;
-            } else {
-                return self.delta_x > 0;
-            }
-        }
-
-        let x2 = self.partition_x + self.delta_x;
-        let y2 = self.partition_y + self.delta_y;
-        return (x2 - self.partition_x) as i32 * (y - self.partition_y) as i32
-            > (y2 - self.partition_y) as i32 * (x - self.partition_x) as i32;
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Sector {
     pub floor_height: i16,
@@ -208,7 +112,7 @@ pub struct LevelData {
     pub vertexes: Vec<Vertex>,
     pub segs: Vec<Segment>,
     pub subsectors: Vec<Box<SubSector>>,
-    pub nodes: Node,
+    pub nodes: Vec<MapNode>,
     pub sectors: Vec<Sector>,
 }
 
@@ -441,14 +345,6 @@ impl WadFile {
                 })
             }
 
-            let root_map_node = map_nodes.pop().unwrap();
-            let nodes: Node = Node::new(
-                &root_map_node,
-                &map_nodes,
-                subsectors.iter().map(|ss| *ss.clone()).collect(),
-            );
-            // println!("BSP: {:?}", nodes);
-
             lump_idx += 1;
             let sector_lump = &directory[lump_idx];
             debug_assert!(sector_lump.name == "SECTORS");
@@ -487,7 +383,7 @@ impl WadFile {
                 vertexes,
                 segs,
                 subsectors,
-                nodes,
+                nodes: map_nodes,
                 sectors,
             });
         }

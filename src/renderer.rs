@@ -8,6 +8,7 @@ use sdl2::{
 
 use crate::{
     interface::{Interface, Player},
+    level::{self, Child, Level, Node},
     wad::*,
 };
 
@@ -32,7 +33,7 @@ impl Renderer {
         }
     }
 
-    pub fn find_bounds(&mut self, level: &LevelData) {
+    pub fn find_bounds(&mut self, level: &Level) {
         let mut min_x = i16::MAX;
         let mut max_x = i16::MIN;
         let mut min_y = i16::MAX;
@@ -63,12 +64,21 @@ impl Renderer {
             * 1000.;
     }
 
-    pub fn draw(&mut self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
+    pub fn draw(
+        &mut self,
+        bsp_render: Option<u32>,
+        player: &Player,
+        level: &Level,
+        canvas: &mut WindowCanvas,
+    ) {
         self.draw_grid(canvas);
-        self._draw_lines(level, canvas);
-        self.draw_verts(level, canvas);
+        self._draw_lines(&level, canvas);
+        self.draw_verts(&level, canvas);
         self.draw_player(&player, canvas);
-        self.draw_node(&player, level, canvas);
+        self.draw_node(&player, &level, canvas);
+        if let Some(bsp_render_depth) = bsp_render {
+            self.draw_bsp_search(bsp_render_depth, &player, &level, canvas)
+        }
     }
 
     fn adjust_coord(&self, x: i16, y: i16) -> (i32, i32) {
@@ -79,6 +89,19 @@ impl Renderer {
             ((Interface::HEIGHT - 12) * Interface::MULTIPLIER) as i32 - drawn_y as i32
                 + Interface::MULTIPLIER as i32,
         )
+    }
+
+    fn adjust_dimension(&self, x: i16, y: i16) -> (u32, u32) {
+        let drawn_x = x as i32 * self.x_multiplier.floor() as i32 / 1000;
+        let drawn_y = y as i32 * self.y_multiplier.floor() as i32 / 1000;
+        (drawn_x as u32, drawn_y as u32)
+    }
+
+    fn bbox_to_rect(&self, bbox: &BBox) -> Rect {
+        let (x, y, w, h) = (bbox.left, bbox.top, bbox.width, bbox.height);
+        let (drawn_x, drawn_y) = self.adjust_coord(x, y);
+        let (drawn_w, drawn_h) = self.adjust_dimension(w, h);
+        Rect::new(drawn_x, drawn_y, drawn_w, drawn_h)
     }
 
     fn angle_to_vertex(player: &Player, v: &Vertex) -> f32 {
@@ -129,24 +152,6 @@ impl Renderer {
         Some((a1, a2))
     }
 
-    fn _draw_sectors(&self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
-        let ssec = level
-            .nodes
-            .find(player.x.trunc() as i16, player.y.trunc() as i16);
-        canvas.set_draw_color(Color::YELLOW);
-        level.segs[ssec.first_segment..ssec.first_segment + ssec.segment_count]
-            .into_iter()
-            .for_each(|seg| {
-                let v_s = level.vertexes.get(seg.start_vert).cloned().unwrap();
-                let v_e = level.vertexes.get(seg.end_vert).cloned().unwrap();
-                let (x1, y1) = self.adjust_coord(v_s.x, v_s.y);
-                let (x2, y2) = self.adjust_coord(v_e.x, v_e.y);
-                canvas
-                    .draw_line(Point::new(x1, y1), Point::new(x2, y2))
-                    .unwrap();
-            });
-    }
-
     fn draw_player(&self, player: &Player, canvas: &mut WindowCanvas) {
         // println!("{} ({})", player.angle, player.angle.to_degrees());
         let (x, y) = self.adjust_coord(player.x.trunc() as i16, player.y.trunc() as i16);
@@ -184,7 +189,7 @@ impl Renderer {
             .unwrap();
     }
 
-    fn draw_verts(&self, level: &LevelData, canvas: &mut WindowCanvas) {
+    fn draw_verts(&self, level: &Level, canvas: &mut WindowCanvas) {
         canvas.set_draw_color(Color::CYAN);
         level.vertexes.iter().for_each(|Vertex { x, y }| {
             let (drawn_x, drawn_y) = self.adjust_coord(*x, *y);
@@ -193,39 +198,31 @@ impl Renderer {
         });
     }
 
-    fn _draw_lines(&self, level: &LevelData, canvas: &mut WindowCanvas) {
+    fn _draw_lines(&self, level: &Level, canvas: &mut WindowCanvas) {
         canvas.set_draw_color(Color::RED);
-        level.linedefs.iter().for_each(
-            |Linedef {
-                 start_vert,
-                 end_vert,
-                 ..
-             }| {
-                let v1 = level.vertexes[*start_vert];
-                let v2 = level.vertexes[*end_vert];
-                let (drawn_x1, drawn_y1) = self.adjust_coord(v1.x, v1.y);
-                let (drawn_x2, drawn_y2) = self.adjust_coord(v2.x, v2.y);
+        level.linedefs.iter().for_each(|ld| {
+            let v1 = level.vertexes[ld.start_vert];
+            let v2 = level.vertexes[ld.end_vert];
+            let (drawn_x1, drawn_y1) = self.adjust_coord(v1.x, v1.y);
+            let (drawn_x2, drawn_y2) = self.adjust_coord(v2.x, v2.y);
 
-                canvas
-                    .draw_line(
-                        Point::new(drawn_x1, drawn_y1),
-                        Point::new(drawn_x2, drawn_y2),
-                    )
-                    .unwrap();
-            },
-        );
+            canvas
+                .draw_line(
+                    Point::new(drawn_x1, drawn_y1),
+                    Point::new(drawn_x2, drawn_y2),
+                )
+                .unwrap();
+        });
     }
 
     fn draw_sector(
         &self,
-        ssec: &SubSector,
-        level: &LevelData,
+        ssec: &level::SubSector,
+        level: &Level,
         player: &Player,
         canvas: &mut WindowCanvas,
     ) {
-        let seg_start = ssec.first_segment;
-        let seg_end = seg_start + ssec.segment_count;
-        level.segs[seg_start..seg_end].iter().for_each(|seg| {
+        ssec.segments.iter().for_each(|seg| {
             let mut v1 = level.vertexes[seg.start_vert].clone();
             let mut v2 = level.vertexes[seg.end_vert].clone();
             if let Some((_a1, _a2)) = Self::is_seg_visible(player, &mut v1, &mut v2) {
@@ -241,7 +238,7 @@ impl Renderer {
             }
         })
     }
-    fn draw_bsp(&self, node: &Node, level: &LevelData, player: &Player, canvas: &mut WindowCanvas) {
+    fn draw_bsp(&self, node: &Node, level: &Level, player: &Player, canvas: &mut WindowCanvas) {
         match &node.left_child {
             Some(Child::NODE(n)) => self.draw_bsp(&n, level, player, canvas),
             Some(Child::SUBSECTOR(ssec)) => self.draw_sector(ssec, level, player, canvas),
@@ -254,9 +251,9 @@ impl Renderer {
         }
     }
 
-    fn draw_node(&self, player: &Player, level: &LevelData, canvas: &mut WindowCanvas) {
+    fn draw_node(&self, player: &Player, level: &Level, canvas: &mut WindowCanvas) {
         canvas.set_draw_color(Color::YELLOW);
-        self.draw_bsp(&level.nodes, level, player, canvas);
+        self.draw_bsp(&level.root_node, level, player, canvas);
         // if let Some(Child::NODE(n)) = &level.nodes.left_child {
         //     let (x1, y1) = self.adjust_coord(&n.left_bbox.left, &n.left_bbox.top);
         //     let (w1, h1) = self.adjust_dim(&n.left_bbox.width, &n.left_bbox.height);
@@ -272,6 +269,39 @@ impl Renderer {
         //         .draw_rect(Rect::new(x2, y2, w2 as u32, h2 as u32))
         //         .unwrap();
         // }
+    }
+
+    fn draw_bsp_search(
+        &self,
+        depth: u32,
+        player: &Player,
+        level: &Level,
+        canvas: &mut WindowCanvas,
+    ) {
+        if depth == 0 {
+            canvas.set_draw_color(Color::CYAN);
+            canvas
+                .draw_rect(self.bbox_to_rect(&level.root_node.left_bbox))
+                .unwrap();
+            canvas.set_draw_color(Color::GREEN);
+            canvas
+                .draw_rect(self.bbox_to_rect(&level.root_node.right_bbox))
+                .unwrap();
+            return;
+        }
+        let child =
+            level
+                .root_node
+                .find_partial(player.x.trunc() as i16, player.y.trunc() as i16, depth);
+        match child {
+            Child::NODE(n) => {
+                canvas.set_draw_color(Color::CYAN);
+                canvas.draw_rect(self.bbox_to_rect(&n.left_bbox)).unwrap();
+                canvas.set_draw_color(Color::GREEN);
+                canvas.draw_rect(self.bbox_to_rect(&n.right_bbox)).unwrap();
+            }
+            Child::SUBSECTOR(s) => self.draw_sector(s, level, player, canvas),
+        }
     }
 
     fn draw_grid(&self, canvas: &mut WindowCanvas) {

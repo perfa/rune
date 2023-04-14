@@ -12,14 +12,14 @@ use sdl2::{
     EventPump,
 };
 
-use crate::{renderer::Renderer, wad::WadFile};
+use crate::{level::Level, renderer::Renderer, wad::WadFile};
 
 enum GameState {
     Viewing,
     Playing,
     Paused,
-    TitleScreen,
-    GameOver,
+    _TitleScreen,
+    _GameOver,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -32,6 +32,7 @@ pub struct Player {
 pub struct Interface {
     state: GameState,
     pressed_keys: HashSet<Scancode>,
+    bsp_render: Option<u32>,
 }
 
 impl Interface {
@@ -43,15 +44,16 @@ impl Interface {
         Interface {
             pressed_keys: HashSet::new(),
             state: GameState::Viewing,
+            bsp_render: None,
         }
     }
 
     pub fn run(&mut self, wad: &WadFile) {
         let mut current_level = 0;
         let level_count = wad.levels.len();
-        let mut level = &wad.levels[current_level];
+        let mut level = Level::new(&wad.levels[current_level]);
         let mut renderer = Renderer::new();
-        renderer.find_bounds(level);
+        renderer.find_bounds(&level);
         let player_thing = level.things.iter().find(|t| t.thing_type == 1).unwrap();
         let mut player = Player {
             x: f32::from(player_thing.x),
@@ -97,12 +99,12 @@ impl Interface {
                         ..
                     } => {
                         current_level = cmp::min(level_count - 1, current_level + 1);
-                        level = &wad.levels[current_level];
+                        level = Level::new(&wad.levels[current_level]);
                         let player_thing = level.things.iter().find(|t| t.thing_type == 1).unwrap();
                         player.x = f32::from(player_thing.x);
                         player.y = f32::from(player_thing.y);
                         player.angle = player_thing.angle_facing;
-                        renderer.find_bounds(level);
+                        renderer.find_bounds(&level);
                     }
                     Event::KeyDown {
                         keycode: Some(Keycode::Comma),
@@ -113,20 +115,40 @@ impl Interface {
                         } else {
                             0
                         };
-                        level = &wad.levels[current_level];
+                        level = Level::new(&wad.levels[current_level]);
                         let player_thing = level.things.iter().find(|t| t.thing_type == 1).unwrap();
                         player.x = f32::from(player_thing.x);
                         player.y = f32::from(player_thing.y);
                         player.angle = player_thing.angle_facing;
-                        renderer.find_bounds(level);
+                        renderer.find_bounds(&level);
                     }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::N),
+                        ..
+                    } => match self.bsp_render {
+                        None => (),
+                        Some(level) => {
+                            if level == 0 {
+                                self.bsp_render = None;
+                            } else {
+                                self.bsp_render = Some(level - 1)
+                            }
+                        }
+                    },
+                    Event::KeyDown {
+                        keycode: Some(Keycode::M),
+                        ..
+                    } => match self.bsp_render {
+                        None => self.bsp_render = Some(0),
+                        Some(level) => self.bsp_render = Some(level + 1),
+                    },
                     _ => {}
                 }
             }
             self.handle_input(&mut player, &mut event_pump);
 
             // DRAW SOMETHING
-            renderer.draw(&player, level, &mut canvas);
+            renderer.draw(self.bsp_render, &player, &level, &mut canvas);
 
             canvas.present();
             let cycle_time = Instant::now() - loop_start;
@@ -151,7 +173,7 @@ impl Interface {
         self.pressed_keys = scancodes;
 
         match self.state {
-            GameState::TitleScreen => {
+            GameState::_TitleScreen => {
                 if newly_pressed.contains(&Scancode::Space) {
                     self.state = GameState::Playing
                 }
@@ -185,7 +207,7 @@ impl Interface {
                     self.state = GameState::Playing;
                 }
             }
-            GameState::GameOver => {
+            GameState::_GameOver => {
                 if newly_pressed.contains(&Scancode::Space) {
                     // TODO: Reset
                     self.state = GameState::Playing

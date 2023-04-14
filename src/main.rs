@@ -1,4 +1,5 @@
 mod interface;
+mod level;
 mod renderer;
 mod wad;
 
