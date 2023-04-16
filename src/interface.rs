@@ -191,14 +191,24 @@ impl Interface {
                     player.y -= f32::sin(player.angle) * 3.;
                 }
                 if self.pressed_keys.contains(&Scancode::Left) {
-                    player.angle += 0.05;
-                    if player.angle > 2.0 * consts::PI {
-                        player.angle -= 2.0 * consts::PI;
+                    if self.pressed_keys.contains(&Scancode::LGui) {
+                        player.x += f32::cos(player.angle + consts::FRAC_PI_2) * 3.;
+                        player.y += f32::sin(player.angle + consts::FRAC_PI_2) * 3.;
+                    } else {
+                        player.angle += 0.05;
+                        if player.angle > 2.0 * consts::PI {
+                            player.angle -= 2.0 * consts::PI;
+                        }
                     }
                 } else if self.pressed_keys.contains(&Scancode::Right) {
-                    player.angle -= 0.05;
-                    if player.angle < 0.0 {
-                        player.angle += 2.0 * consts::PI;
+                    if self.pressed_keys.contains(&Scancode::LGui) {
+                        player.x += f32::cos(player.angle - consts::FRAC_PI_2) * 3.;
+                        player.y += f32::sin(player.angle - consts::FRAC_PI_2) * 3.;
+                    } else {
+                        player.angle -= 0.05;
+                        if player.angle < 0.0 {
+                            player.angle += 2.0 * consts::PI;
+                        }
                     }
                 }
             }

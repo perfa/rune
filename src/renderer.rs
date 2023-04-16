@@ -107,18 +107,68 @@ impl Renderer {
     fn angle_to_vertex(player: &Player, v: &Vertex) -> f32 {
         let dx = v.x as f32 - player.x;
         let dy = v.y as f32 - player.y;
-        let raw_angle = dy.atan2(dx);
+        let angle = dy.atan2(dx);
 
-        if raw_angle < 0. {
-            return raw_angle + (2. * consts::PI);
+        if angle < 0. {
+            return angle + (2. * consts::PI);
         }
 
-        raw_angle
+        angle
+    }
+
+    fn find_intersection(player: &Player, angle: f32, v1: &Vertex, v2: &Vertex) -> Option<Vertex> {
+        let (x_min, y_min, x_max, y_max) = if v1.x < v2.x {
+            (v1.x as f32, v1.y as f32, v2.x as f32, v2.y as f32)
+        } else {
+            (v2.x as f32, v2.y as f32, v1.x as f32, v1.y as f32)
+        };
+
+        // y = mx + b form for trace from player position
+        let m1 = angle.tan();
+        let b1 = (player.y as f32) - m1 * (player.x as f32);
+
+        if v1.x == v2.x {
+            // Seg is sticking straight up the Y axis
+            let (x_intersect, y_intersect) = (v1.x as f32, m1 * v1.x as f32 + b1);
+            return Some(Vertex {
+                x: x_intersect.trunc() as i16,
+                y: y_intersect.trunc() as i16,
+            });
+        }
+
+        // y = mx + b form for Seg
+        let m2 = (y_max - y_min) / (x_max - x_min);
+        let b2 = y_min - m2 * x_min;
+        //println!("{}x + {};  {}x + {}", m1, b1, m2, b2);
+
+        // Check if the lines are parallel
+        if m1 == m2 {
+            // Technically the whole Seg is in view,
+            // but it will render as 0 pixels, so skip it.
+            return None;
+        }
+
+        let x_intersect = if m1 == f32::INFINITY || m1 == f32::NEG_INFINITY {
+            // Angle-to-vertex is stick straight up the Y axis
+            v1.x as f32
+        } else {
+            (b2 - b1) / (m1 - m2)
+        };
+        let y_intersect = m1 * x_intersect + b1;
+
+        Some(Vertex {
+            x: x_intersect.trunc() as i16,
+            y: y_intersect.trunc() as i16,
+        })
     }
 
     fn is_seg_visible(player: &Player, v1: &mut Vertex, v2: &mut Vertex) -> Option<(f32, f32)> {
         let mut a1 = Self::angle_to_vertex(player, v1);
         let mut a2 = Self::angle_to_vertex(player, v2);
+
+        if a2 > a1 {
+            return None;
+        }
 
         let angle_diff = a1 - a2;
         if angle_diff >= consts::PI {
@@ -135,16 +185,29 @@ impl Renderer {
 
         if rotated_a1 > consts::FRAC_PI_2 {
             rotated_a1 -= consts::FRAC_PI_2;
-            // To be used for clipping later
-            a1 = player.angle + consts::FRAC_PI_4;
+            // a1 further left than distance a1-a2
             // both points are left of view
             if rotated_a1 >= angle_diff {
                 return None;
             }
+            // To be used for clipping later
+            a1 = player.angle + consts::FRAC_PI_4;
         }
 
-        let rotated_a2 = consts::FRAC_PI_4 - a2; // distance from left edge to our angle
-                                                 // if greater than FOV
+        let mut rotated_a2 = a2 - player.angle;
+        if rotated_a2 < 0. {
+            rotated_a2 += consts::PI * 2.;
+        } else if rotated_a2 > consts::PI * 2. {
+            rotated_a2 -= consts::PI * 2.;
+        }
+
+        rotated_a2 = consts::FRAC_PI_4 - rotated_a2; // distance from left edge to our angle
+                                                     // if greater than FOV
+        if rotated_a2 < 0. {
+            rotated_a2 += consts::PI * 2.;
+        } else if rotated_a2 > consts::PI * 2. {
+            rotated_a2 -= consts::PI * 2.;
+        }
         if rotated_a2 > consts::FRAC_PI_2 {
             // To be used for clipping later
             a2 = player.angle - consts::FRAC_PI_4;
@@ -173,12 +236,12 @@ impl Renderer {
 
         canvas.set_draw_color(Color::CYAN);
         let (left_los_x, left_los_y) = self.adjust_coord(
-            ((f32::cos(player.angle + consts::FRAC_PI_4) * 2000.) + player.x).trunc() as i16,
-            ((f32::sin(player.angle + consts::FRAC_PI_4) * 2000.) + player.y).trunc() as i16,
+            ((f32::cos(player.angle + consts::FRAC_PI_4) * 4000.) + player.x).trunc() as i16,
+            ((f32::sin(player.angle + consts::FRAC_PI_4) * 4000.) + player.y).trunc() as i16,
         );
         let (right_los_x, right_los_y) = self.adjust_coord(
-            ((f32::cos(player.angle - consts::FRAC_PI_4) * 2000.) + player.x).trunc() as i16,
-            ((f32::sin(player.angle - consts::FRAC_PI_4) * 2000.) + player.y).trunc() as i16,
+            ((f32::cos(player.angle - consts::FRAC_PI_4) * 4000.) + player.x).trunc() as i16,
+            ((f32::sin(player.angle - consts::FRAC_PI_4) * 4000.) + player.y).trunc() as i16,
         );
 
         canvas
@@ -225,9 +288,11 @@ impl Renderer {
         ssec.segments.iter().for_each(|seg| {
             let mut v1 = level.vertexes[seg.start_vert].clone();
             let mut v2 = level.vertexes[seg.end_vert].clone();
-            if let Some((_a1, _a2)) = Self::is_seg_visible(player, &mut v1, &mut v2) {
-                let (drawn_x1, drawn_y1) = self.adjust_coord(v1.x, v1.y);
-                let (drawn_x2, drawn_y2) = self.adjust_coord(v2.x, v2.y);
+            if let Some((a1, a2)) = Self::is_seg_visible(player, &mut v1, &mut v2) {
+                let new_v1 = Renderer::find_intersection(player, a1, &v1, &v2).unwrap_or(v1);
+                let new_v2 = Renderer::find_intersection(player, a2, &v1, &v2).unwrap_or(v2);
+                let (drawn_x1, drawn_y1) = self.adjust_coord(new_v1.x, new_v1.y);
+                let (drawn_x2, drawn_y2) = self.adjust_coord(new_v2.x, new_v2.y);
 
                 canvas
                     .draw_line(
